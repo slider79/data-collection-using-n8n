@@ -20,7 +20,15 @@ Schedule 06:00  ─┘                                                          
 
 ## Setting it up
 
-**1. Import.** In n8n, Workflows, Import from File, choose the `.json`.
+**0. n8n needs Node 22.22 or newer.** Older versions refuse to start with a version-range error rather than anything useful. `node --version` to check.
+
+**1. Import.** In n8n, Workflows, Import from File, choose the `.json`. Or from a terminal:
+
+```bash
+npx n8n import:workflow --input=Zameen_Property_Scraper.workflow.json
+```
+
+Both routes are tested. The file carries a top-level `id` specifically so the command line route works: n8n's GUI invents one on import, the CLI does not, and the database column is `NOT NULL`, so without it the import fails with `SQLITE_CONSTRAINT` and no hint as to why.
 
 **2. Add your URLs.** Open the **Property URLs** node and paste listing URLs into the array at the top, one per line. They look like `https://www.zameen.com/Property/...-52274461-1632-1.html`.
 
@@ -32,7 +40,9 @@ listing_id	title	price_text	price_pkr	currency	city	location	address	property_ty
 
 The header must match exactly. The Google Sheets node maps fields onto columns **by name**, so a renamed column silently drops that field rather than erroring.
 
-**4. Connect Google.** Open **Save to Google Sheets**, add a Google Sheets OAuth2 credential, and replace `PASTE_YOUR_GOOGLE_SHEET_ID_HERE` with your sheet's ID, the long string in its URL between `/d/` and `/edit`.
+**4. Connect Google.** Open **Save to Google Sheets** and attach a credential. A **Service Account** is less work than OAuth2: it needs no redirect URI and no consent screen, just the `client_email` and `private_key` from a service account JSON key. Share the sheet with that `client_email` as **Editor**, which is the step that is easy to miss and produces a 403 when skipped.
+
+The `documentId` is already filled in. Change it if you point this at a different sheet.
 
 **5. Run it.** Execute Workflow. The schedule only fires once you activate the workflow, at 06:00 Asia/Karachi.
 

@@ -211,7 +211,7 @@ nodes = [
             "operation": "appendOrUpdate",
             "documentId": {
                 "__rl": True,
-                "value": "PASTE_YOUR_GOOGLE_SHEET_ID_HERE",
+                "value": "1Osd0a_5dmkHSkjM-Xg6D7cjU_mVWEHDGU08VeyEhKyg",
                 "mode": "id",
             },
             "sheetName": {"__rl": True, "value": "Listings", "mode": "name"},
@@ -290,6 +290,11 @@ connections = {
 }
 
 workflow = {
+    # n8n's GUI import invents an id, but `n8n import:workflow` does not,
+    # and the database column is NOT NULL. Without this the file imports
+    # from the browser and fails from the command line, which is a
+    # confusing way to find out.
+    "id": "zameenCollector01",
     "name": "Zameen property listings to Google Sheets",
     "nodes": nodes,
     "connections": connections,
