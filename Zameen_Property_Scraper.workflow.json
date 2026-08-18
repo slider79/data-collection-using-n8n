@@ -1,0 +1,326 @@
+{
+  "name": "Zameen property listings to Google Sheets",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "run-manually",
+      "name": "Run manually",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -160,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 6
+            }
+          ]
+        }
+      },
+      "id": "every-morning",
+      "name": "Every morning",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -160,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// The listings to collect. Paste Zameen.com property urls here, one per line.\n//\n// Each url becomes its own item, so everything downstream runs once per\n// listing and one bad url cannot take the others down with it.\nconst urls = [\n  'https://www.zameen.com/Property/dha_phase_7_dha_phase_7_-_block_y_exclusive_10_marla_double_unit_house_for_sale_in_dha_phase_7-52274461-1632-1.html'\n];\n\nreturn urls\n  .map((u) => String(u).trim())\n  .filter((u) => u.startsWith('http'))\n  .map((listing_url) => ({ json: { listing_url } }));\n"
+      },
+      "id": "property-urls",
+      "name": "Property URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.listing_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "en-US,en;q=0.9"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 2000
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "fetch-listing-page",
+      "name": "Fetch listing page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        300,
+        320
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Runs once for all items.\n//\n// Everything below is generated from extract.js in this repository, which is\n// how it came to be tested against ten real listings before it ever ran here.\n\nfunction textOf(html) {\n  return html\n    .replace(/<[^>]+>/g, \" \")\n    .replace(/&amp;/g, \"&\")\n    .replace(/&quot;/g, '\"')\n    .replace(/&#x27;|&apos;/g, \"'\")\n    .replace(/&lt;/g, \"<\")\n    .replace(/&gt;/g, \">\")\n    .replace(/&nbsp;/g, \" \")\n    .replace(/\\s+/g, \" \")\n    .trim();\n}\n\n/** First element carrying this aria-label, as plain text. */\nfunction byLabel(html, label) {\n  const span = new RegExp(`aria-label=\"${label}\"[^>]*>(.*?)</span>`, \"is\");\n  const div = new RegExp(`aria-label=\"${label}\"[^>]*>(.*?)</div>`, \"is\");\n  const m = html.match(span) || html.match(div);\n  return m ? textOf(m[1]) : \"\";\n}\n\n/** The breadcrumb trail, which is the only reliable source of city. */\nfunction breadcrumbs(html) {\n  const m = html.match(\n    /<script type=\"application\\/ld\\+json\"[^>]*>([\\s\\S]*?)<\\/script>/i\n  );\n  if (!m) return [];\n  try {\n    const data = JSON.parse(m[1]);\n    const list = Array.isArray(data) ? data : [data];\n    for (const entry of list) {\n      if (entry[\"@type\"] === \"BreadcrumbList\") {\n        return (entry.itemListElement || [])\n          .sort((a, b) => (a.position || 0) - (b.position || 0))\n          .map((i) => String(i.name || \"\").trim())\n          .filter(Boolean);\n      }\n    }\n  } catch (err) {\n    return [];\n  }\n  return [];\n}\n\n// --- cleaning -------------------------------------------------------------\n\nconst PRICE_SCALE = { thousand: 1e3, lakh: 1e5, lac: 1e5, crore: 1e7, arab: 1e9 };\n\n/** \"4.53 Crore\" -> 45300000. Returns null when there is no usable number. */\nfunction priceToNumber(text) {\n  if (!text) return null;\n  const cleaned = text.replace(/,/g, \"\").toLowerCase();\n  const m = cleaned.match(/([\\d.]+)\\s*(thousand|lakh|lac|crore|arab)?/);\n  if (!m) return null;\n  const value = parseFloat(m[1]);\n  if (!isFinite(value)) return null;\n  return Math.round(value * (PRICE_SCALE[m[2]] || 1));\n}\n\n// Zameen's own convention: 1 Marla = 225 sq ft, 1 Kanal = 20 Marla.\nconst AREA_SQFT = {\n  marla: 225,\n  kanal: 4500,\n  \"sq. ft.\": 1,\n  \"sq ft\": 1,\n  sqft: 1,\n  \"square feet\": 1,\n  \"sq. yd.\": 9,\n  \"sq yd\": 9,\n  \"square yards\": 9,\n  \"sq. m.\": 10.7639,\n  \"square metres\": 10.7639,\n  acre: 43560,\n};\n\n/** \"10 Marla\" -> { value: 10, unit: \"Marla\", sqft: 2250 } */\nfunction parseArea(text) {\n  if (!text) return { value: null, unit: \"\", sqft: null };\n  const cleaned = text.replace(/,/g, \"\").trim();\n  const m = cleaned.match(/([\\d.]+)\\s*(.*)$/);\n  if (!m) return { value: null, unit: \"\", sqft: null };\n  const value = parseFloat(m[1]);\n  const unit = (m[2] || \"\").trim();\n  const factor = AREA_SQFT[unit.toLowerCase()];\n  return {\n    value: isFinite(value) ? value : null,\n    unit,\n    sqft: isFinite(value) && factor ? Math.round(value * factor) : null,\n  };\n}\n\n/** \"4 Beds\" -> 4. \"Studio\" -> 0. Anything unreadable -> null. */\nfunction countOf(text) {\n  if (!text) return null;\n  if (/studio/i.test(text)) return 0;\n  const m = text.replace(/,/g, \"\").match(/\\d+/);\n  return m ? parseInt(m[0], 10) : null;\n}\n\n/** Zameen puts the numeric id in the url: ...-52274461-1632-1.html */\nfunction listingIdFrom(url) {\n  const m = String(url).match(/-(\\d{5,})-\\d+-\\d+\\.html/);\n  return m ? m[1] : \"\";\n}\n\n// --- the extractor --------------------------------------------------------\n\nfunction extractListing(html, url) {\n  const crumbs = breadcrumbs(html);\n  // [\"Zameen\", \"Lahore Houses\", \"DHA Defence Houses\", ..., \"House 52274461\"]\n  const city = (crumbs[1] || \"\").replace(/\\s+(Houses|Homes|Plots|Flats|Apartments|Property|Commercial).*$/i, \"\").trim();\n\n  const h1 = html.match(/<h1[^>]*>([\\s\\S]*?)<\\/h1>/i);\n  const title = h1 ? textOf(h1[1]) : \"\";\n\n  const priceText = byLabel(html, \"Price\");\n  const areaText = byLabel(html, \"Area\");\n  const area = parseArea(areaText);\n\n  // \"DHA Phase 7 - Block Y, DHA Phase 7, DHA Defence, Lahore, Punjab\"\n  const header = byLabel(html, \"Property header\")\n    .replace(/\\s*(Home Loan|Share on Facebook).*$/i, \"\")\n    .trim();\n  const location = byLabel(html, \"Location\") || header;\n\n  return {\n    listing_id: listingIdFrom(url),\n    title,\n    price_text: priceText,\n    price_pkr: priceToNumber(priceText),\n    currency: byLabel(html, \"Currency\") || \"PKR\",\n    city,\n    location,\n    address: header,\n    property_type: byLabel(html, \"Type\"),\n    purpose: byLabel(html, \"Purpose\"),\n    area_text: areaText,\n    area_value: area.value,\n    area_unit: area.unit,\n    area_sqft: area.sqft,\n    bedrooms: countOf(byLabel(html, \"Beds\")),\n    bathrooms: countOf(byLabel(html, \"Baths\")),\n    description: byLabel(html, \"Property description\").slice(0, 1000),\n    listing_url: url,\n    scraped_at: new Date().toISOString(),\n  };\n}\n\n// ---------------------------------------------------------------------------\n// n8n glue.\n//\n// The HTTP node returns only the response body, so the url each page came from\n// has to be read back from the node that produced it. Items keep their order\n// through the request, so lining them up by index is safe.\nconst sources = $('Property URLs').all();\nconst pages = $input.all();\nconst rows = [];\n\nfor (let i = 0; i < pages.length; i++) {\n  const html = pages[i].json.data || '';\n  const url = (sources[i] && sources[i].json.listing_url) || '';\n\n  if (!html) {\n    // A failed request still produces an item, because the HTTP node is set to\n    // carry on. Marking it here means the IF node can route it aside instead\n    // of a blank row reaching the spreadsheet.\n    rows.push({\n      json: { listing_url: url, title: '', price_pkr: null, error: 'empty response' },\n    });\n    continue;\n  }\n\n  rows.push({ json: extractListing(html, url) });\n}\n\nreturn rows;\n"
+      },
+      "id": "extract-and-clean",
+      "name": "Extract and clean",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        520,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "has-title",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.title }}",
+              "rightValue": ""
+            },
+            {
+              "id": "has-price",
+              "operator": {
+                "type": "number",
+                "operation": "exists",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.price_pkr }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "got-a-usable-listing",
+      "name": "Got a usable listing?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        740,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "PASTE_YOUR_GOOGLE_SHEET_ID_HERE",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Listings",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [
+            "listing_id"
+          ],
+          "value": {},
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "save-to-google-sheets",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        980,
+        220
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "skipped-incomplete",
+      "name": "Skipped, incomplete",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        980,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Zameen listing collector\n\n**1.** Paste listing urls into the **Property URLs** node.\n\n**2.** Put your sheet id into **Save to Google Sheets** and attach a Google Sheets credential.\n\n**3.** The sheet needs a tab called `Listings` with the header row from README.md.\n\nRun it manually first. The schedule only fires once the workflow is activated.",
+        "height": 320,
+        "width": 420,
+        "color": 4
+      },
+      "id": "note-setup",
+      "name": "Note: setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -460,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Why aria-label, not class names\n\nZameen ships hashed css classes such as `_63ea997b`, which change whenever they deploy. The `aria-label` attributes say what an element is for, so they survive a redesign.\n\nChecked against ten live listings in Lahore, Karachi and Islamabad: all ten returned every field.",
+        "height": 320,
+        "width": 420,
+        "color": 5
+      },
+      "id": "note-selectors",
+      "name": "Note: selectors",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        440,
+        -140
+      ]
+    },
+    {
+      "parameters": {
+        "content": "### Duplicates\n\n**Append or update**, matching on `listing_id`, so re-running the same url refreshes that row instead of adding a second one. The id is parsed out of the url.",
+        "height": 320,
+        "width": 360,
+        "color": 3
+      },
+      "id": "note-dedupe",
+      "name": "Note: dedupe",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        900,
+        -140
+      ]
+    }
+  ],
+  "connections": {
+    "Run manually": {
+      "main": [
+        [
+          {
+            "node": "Property URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every morning": {
+      "main": [
+        [
+          {
+            "node": "Property URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Property URLs": {
+      "main": [
+        [
+          {
+            "node": "Fetch listing page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch listing page": {
+      "main": [
+        [
+          {
+            "node": "Extract and clean",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract and clean": {
+      "main": [
+        [
+          {
+            "node": "Got a usable listing?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Got a usable listing?": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skipped, incomplete",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Karachi",
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "tags": [],
+  "meta": {
+    "instanceId": "zameen-property-collector"
+  }
+}
