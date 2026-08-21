@@ -89,6 +89,30 @@ the Run workflow box for a one-off.
 
 ---
 
+## The dashboard
+
+`docs/index.html` is a static page showing what has been collected: headline
+numbers, price by listing, covered area against price, and the full table. It
+is served by GitHub Pages from this repository, and the scheduled run commits a
+refreshed `docs/data.json` after each collection, so the page keeps itself up to
+date without a server behind it.
+
+**Turning it on.** Settings, Pages, Source: *Deploy from a branch*, branch
+`main`, folder `/docs`. It appears at
+`https://slider79.github.io/data-collection-using-n8n/` within a minute or two.
+
+No keys reach the browser. The page reads a committed json file; the credentials
+only ever exist inside the Actions run.
+
+**On the charts.** Prices are one series, so they use a single sequential hue
+and need no legend. The scatter separates three cities, so it uses categorical
+hues, and those three were checked with a palette validator against the dark
+surface before being used: worst colour-blind separation ΔE 9.4, worst
+normal-vision ΔE 20.9, all three above 3:1 contrast. There is a table view as
+well, so nothing depends on telling colours apart.
+
+---
+
 ## What comes out
 
 19 columns per listing. The task asked for ten fields; the extras are the cleaned numeric versions, which are the point of the cleaning step.

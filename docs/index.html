@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Zameen listings</title>
+<meta name="description" content="Property listings collected daily from Zameen.com and logged to Google Sheets." />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%231a1a19'/%3E%3Crect x='12' y='34' width='8' height='18' fill='%233987e5'/%3E%3Crect x='24' y='24' width='8' height='28' fill='%233987e5'/%3E%3Crect x='36' y='14' width='8' height='38' fill='%233987e5'/%3E%3C/svg%3E" />
+<style>
+  /* Palette slots from the data-viz reference instance, dark steps. The three
+     categorical hues were validated all-pairs for the dark surface before use:
+     worst CVD deltaE 9.4, worst normal-vision 20.9, all three above 3:1. */
+  :root {
+    --surface-0: #141413;
+    --surface-1: #1a1a19;
+    --surface-2: #222221;
+    --line: #2f2f2d;
+    --line-soft: #262625;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #8a8980;
+
+    --series-1: #3987e5;   /* blue    Lahore    */
+    --series-2: #d95926;   /* orange  Karachi   */
+    --series-3: #199e70;   /* aqua    Islamabad */
+    --series-other: #6b6a63;
+
+    --seq-400: #3987e5;
+    --seq-550: #1c5cab;
+
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--surface-0);
+    color: var(--text-primary);
+    font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 48px 20px 96px; }
+
+  header h1 { margin: 0; font-size: 1.6rem; font-weight: 600; letter-spacing: -0.01em; }
+  header p { margin: 8px 0 0; color: var(--text-secondary); font-size: 0.92rem; max-width: 68ch; }
+  .stamp { font-family: var(--mono); font-size: 0.72rem; color: var(--text-muted); margin-top: 10px; }
+
+  h2 {
+    font-size: 0.72rem; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.11em; color: var(--text-muted);
+    margin: 44px 0 14px;
+  }
+
+  .panel { border: 1px solid var(--line); background: var(--surface-1); }
+
+  /* Stat tiles. Four headline numbers, which is a form in its own right and
+     does not need a chart behind it. */
+  .tiles { display: grid; grid-template-columns: repeat(4, 1fr); }
+  .tile { padding: 18px 20px; border-right: 1px solid var(--line); }
+  .tile:last-child { border-right: none; }
+  .tile .label {
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.09em;
+    color: var(--text-muted); margin-bottom: 6px;
+  }
+  .tile .value { font-size: 1.55rem; font-weight: 600; line-height: 1.15; }
+  .tile .sub { font-size: 0.78rem; color: var(--text-secondary); margin-top: 3px; }
+
+  .chart { padding: 20px 20px 14px; }
+  .chart-title { font-size: 0.95rem; font-weight: 500; margin: 0 0 2px; }
+  .chart-note { font-size: 0.8rem; color: var(--text-secondary); margin: 0 0 16px; }
+
+  svg { display: block; width: 100%; overflow: visible; }
+  .grid-line { stroke: var(--line-soft); stroke-width: 1; }
+  .axis-text { fill: var(--text-muted); font-size: 11px; font-family: var(--mono); }
+  .bar-label { fill: var(--text-secondary); font-size: 12px; }
+  .value-label { fill: var(--text-primary); font-size: 12px; font-family: var(--mono); }
+
+  .legend { display: flex; gap: 18px; flex-wrap: wrap; margin: 0 0 14px; }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; font-size: 0.82rem; color: var(--text-secondary); }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+
+  /* Hover layer. Every mark has a tooltip; hit targets are the marks plus padding. */
+  .hit { fill: transparent; cursor: pointer; }
+  .mark { transition: opacity 120ms ease; }
+  .dimmed { opacity: 0.25; }
+
+  #tip {
+    position: fixed; pointer-events: none; z-index: 10; opacity: 0;
+    transition: opacity 100ms ease;
+    background: var(--surface-2); border: 1px solid var(--line);
+    padding: 9px 12px; font-size: 0.8rem; max-width: 300px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.45);
+  }
+  #tip .t-title { font-weight: 600; margin-bottom: 4px; line-height: 1.35; }
+  #tip .t-row { color: var(--text-secondary); font-family: var(--mono); font-size: 0.74rem; }
+
+  /* Table view. Present so identity is never carried by colour alone, and
+     because for ten rows the table is genuinely the most useful view. */
+  table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+  th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line-soft); }
+  th {
+    font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--text-muted); font-weight: 600; white-space: nowrap;
+  }
+  td.num { font-family: var(--mono); text-align: right; white-space: nowrap; }
+  tbody tr:hover { background: var(--surface-2); }
+  tbody tr:last-child td { border-bottom: none; }
+  td a { color: var(--text-primary); text-decoration: none; border-bottom: 1px solid var(--line); }
+  td a:hover { border-bottom-color: var(--series-1); }
+  .scroller { overflow-x: auto; }
+
+  footer { margin-top: 48px; color: var(--text-muted); font-size: 0.8rem; }
+  footer a { color: var(--text-secondary); }
+  .empty { padding: 28px 20px; color: var(--text-secondary); }
+
+  @media (max-width: 760px) {
+    .tiles { grid-template-columns: repeat(2, 1fr); }
+    .tile:nth-child(2) { border-right: none; }
+    .tile:nth-child(1), .tile:nth-child(2) { border-bottom: 1px solid var(--line); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: 0.01ms !important; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Zameen property listings</h1>
+    <p>
+      Collected automatically from Zameen.com every morning, cleaned into
+      comparable numbers, and logged to Google Sheets. This page reads the same
+      data the spreadsheet holds.
+    </p>
+    <div class="stamp" id="stamp">Loading</div>
+  </header>
+
+  <h2>Overview</h2>
+  <div class="panel tiles" id="tiles"></div>
+
+  <h2>Price by listing</h2>
+  <div class="panel chart">
+    <p class="chart-title">Asking price, highest first</p>
+    <p class="chart-note">One bar per listing. Hover for the full title and source.</p>
+    <div id="price-chart"></div>
+  </div>
+
+  <h2>Size against price</h2>
+  <div class="panel chart">
+    <p class="chart-title">Covered area versus asking price</p>
+    <p class="chart-note">
+      Each point is a listing. Points further right are larger; points higher up
+      cost more. The gap between the cities is the thing to look at.
+    </p>
+    <div class="legend" id="legend"></div>
+    <div id="scatter-chart"></div>
+  </div>
+
+  <h2>Every listing</h2>
+  <div class="panel scroller">
+    <table id="table">
+      <thead>
+        <tr>
+          <th>Title</th><th>City</th><th>Type</th>
+          <th class="num">Price (PKR)</th><th class="num">Area</th>
+          <th class="num">Sq ft</th><th class="num">PKR/sq ft</th><th class="num">Bed</th><th class="num">Bath</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <footer>
+    Collected by an <a href="https://github.com/slider79/data-collection-using-n8n">n8n workflow</a>
+    and a scheduled job that shares its extraction code. By Shuja Jamal.
+  </footer>
+</div>
+
+<div id="tip" role="tooltip"></div>
+
+<script>
+const CITY_COLOURS = {
+  Lahore: "var(--series-1)",
+  Karachi: "var(--series-2)",
+  Islamabad: "var(--series-3)",
+};
+const colourFor = (city) => CITY_COLOURS[city] || "var(--series-other)";
+
+const tip = document.getElementById("tip");
+const esc = (s) => { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; };
+const num = (n) => Number(n).toLocaleString("en-US");
+
+function crore(value) {
+  const n = Number(value);
+  if (!isFinite(n)) return "n/a";
+  if (n >= 1e7) return (n / 1e7).toFixed(2).replace(/\.00$/, "") + " Cr";
+  if (n >= 1e5) return (n / 1e5).toFixed(1).replace(/\.0$/, "") + " Lakh";
+  return num(n);
+}
+
+function median(values) {
+  const sorted = values.filter((v) => isFinite(v)).sort((a, b) => a - b);
+  if (!sorted.length) return 0;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function showTip(event, html) {
+  tip.innerHTML = html;
+  tip.style.opacity = "1";
+  const box = tip.getBoundingClientRect();
+  let x = event.clientX + 14;
+  let y = event.clientY + 14;
+  if (x + box.width > window.innerWidth - 8) x = event.clientX - box.width - 14;
+  if (y + box.height > window.innerHeight - 8) y = event.clientY - box.height - 14;
+  tip.style.left = x + "px";
+  tip.style.top = y + "px";
+}
+const hideTip = () => { tip.style.opacity = "0"; };
+
+// ---------------------------------------------------------------------------
+function renderTiles(rows) {
+  const prices = rows.map((r) => Number(r.price_pkr));
+  const perSqft = rows
+    .filter((r) => Number(r.area_sqft) > 0)
+    .map((r) => Number(r.price_pkr) / Number(r.area_sqft));
+  const cities = [...new Set(rows.map((r) => r.city).filter(Boolean))];
+
+  const tiles = [
+    { label: "Listings", value: rows.length, sub: cities.length + " cities" },
+    { label: "Median price", value: crore(median(prices)), sub: "PKR" },
+    { label: "Median rate", value: num(Math.round(median(perSqft))), sub: "PKR per sq ft" },
+    {
+      label: "Largest",
+      value: num(Math.max(...rows.map((r) => Number(r.area_sqft) || 0))),
+      sub: "sq ft",
+    },
+  ];
+
+  document.getElementById("tiles").innerHTML = tiles
+    .map(
+      (t) =>
+        '<div class="tile"><div class="label">' + esc(t.label) + '</div>' +
+        '<div class="value">' + esc(String(t.value)) + '</div>' +
+        '<div class="sub">' + esc(t.sub) + '</div></div>'
+    )
+    .join("");
+}
+
+// Horizontal bars: magnitude, one series, so a sequential hue and no legend.
+function renderPriceChart(rows) {
+  const data = [...rows].sort((a, b) => Number(b.price_pkr) - Number(a.price_pkr));
+  const rowH = 30;
+  const labelW = 210;
+  const height = data.length * rowH + 28;
+  const width = 900;
+  const plotW = width - labelW - 90;
+  const max = Math.max(...data.map((r) => Number(r.price_pkr)));
+
+  let svg = '<svg viewBox="0 0 ' + width + " " + height + '" role="img" aria-label="Asking price by listing">';
+
+  // Recessive gridlines behind the bars.
+  for (let t = 0; t <= 4; t++) {
+    const x = labelW + (plotW * t) / 4;
+    svg += '<line class="grid-line" x1="' + x + '" y1="0" x2="' + x + '" y2="' + (height - 26) + '"/>';
+    svg += '<text class="axis-text" x="' + x + '" y="' + (height - 8) + '" text-anchor="middle">' +
+      crore((max * t) / 4) + "</text>";
+  }
+
+  data.forEach((row, i) => {
+    const y = i * rowH + 4;
+    const w = Math.max(2, (Number(row.price_pkr) / max) * plotW);
+    const short = row.title.length > 30 ? row.title.slice(0, 29) + "…" : row.title;
+
+    svg += '<text class="bar-label" x="0" y="' + (y + 15) + '">' + esc(short) + "</text>";
+    // 4px rounded data-end, anchored flat against the baseline.
+    svg += '<rect class="mark" data-i="' + i + '" x="' + labelW + '" y="' + y + '" width="' + w +
+      '" height="20" rx="4" fill="var(--seq-400)"/>';
+    svg += '<text class="value-label" x="' + (labelW + w + 8) + '" y="' + (y + 15) + '">' +
+      crore(row.price_pkr) + "</text>";
+    svg += '<rect class="hit" data-i="' + i + '" x="0" y="' + y + '" width="' + width + '" height="' + rowH + '"/>';
+  });
+
+  svg += "</svg>";
+  document.getElementById("price-chart").innerHTML = svg;
+
+  document.querySelectorAll("#price-chart .hit").forEach((hit) => {
+    hit.addEventListener("mousemove", (e) => {
+      const row = data[Number(hit.dataset.i)];
+      showTip(e,
+        '<div class="t-title">' + esc(row.title) + "</div>" +
+        '<div class="t-row">' + esc(row.city) + " · " + esc(row.property_type) + " · " + esc(row.area_text) + "</div>" +
+        '<div class="t-row">PKR ' + num(row.price_pkr) + "</div>" +
+        '<div class="t-row">' + esc(row.bedrooms) + " bed · " + esc(row.bathrooms) + " bath</div>");
+    });
+    hit.addEventListener("mouseleave", hideTip);
+  });
+}
+
+// Scatter: three cities, so categorical hues, validated all-pairs for dark.
+function renderScatter(rows) {
+  const data = rows.filter((r) => Number(r.area_sqft) > 0 && Number(r.price_pkr) > 0);
+  if (!data.length) return;
+
+  const width = 900, height = 360;
+  const pad = { top: 12, right: 18, bottom: 40, left: 74 };
+  const plotW = width - pad.left - pad.right;
+  const plotH = height - pad.top - pad.bottom;
+
+  const maxArea = Math.max(...data.map((r) => Number(r.area_sqft))) * 1.08;
+  const maxPrice = Math.max(...data.map((r) => Number(r.price_pkr))) * 1.08;
+  const x = (v) => pad.left + (Number(v) / maxArea) * plotW;
+  const y = (v) => pad.top + plotH - (Number(v) / maxPrice) * plotH;
+
+  let svg = '<svg viewBox="0 0 ' + width + " " + height + '" role="img" aria-label="Covered area against asking price">';
+
+  for (let t = 0; t <= 4; t++) {
+    const gy = pad.top + (plotH * t) / 4;
+    svg += '<line class="grid-line" x1="' + pad.left + '" y1="' + gy + '" x2="' + (width - pad.right) + '" y2="' + gy + '"/>';
+    svg += '<text class="axis-text" x="' + (pad.left - 10) + '" y="' + (gy + 4) + '" text-anchor="end">' +
+      crore(maxPrice - (maxPrice * t) / 4) + "</text>";
+    const gx = pad.left + (plotW * t) / 4;
+    svg += '<text class="axis-text" x="' + gx + '" y="' + (height - 16) + '" text-anchor="middle">' +
+      num(Math.round((maxArea * t) / 4)) + "</text>";
+  }
+  svg += '<text class="axis-text" x="' + (pad.left + plotW / 2) + '" y="' + (height - 1) + '" text-anchor="middle">covered area, sq ft</text>';
+
+  data.forEach((row, i) => {
+    // 2px surface ring so overlapping points stay separable.
+    svg += '<circle class="mark" data-i="' + i + '" cx="' + x(row.area_sqft) + '" cy="' + y(row.price_pkr) +
+      '" r="7" fill="' + colourFor(row.city) + '" stroke="var(--surface-1)" stroke-width="2"/>';
+    svg += '<circle class="hit" data-i="' + i + '" cx="' + x(row.area_sqft) + '" cy="' + y(row.price_pkr) + '" r="16"/>';
+  });
+
+  svg += "</svg>";
+  document.getElementById("scatter-chart").innerHTML = svg;
+
+  const cities = [...new Set(data.map((r) => r.city))];
+  document.getElementById("legend").innerHTML = cities
+    .map((c) => '<span><i class="swatch" style="background:' + colourFor(c) + '"></i>' + esc(c) + "</span>")
+    .join("");
+
+  document.querySelectorAll("#scatter-chart .hit").forEach((hit) => {
+    hit.addEventListener("mousemove", (e) => {
+      const row = data[Number(hit.dataset.i)];
+      const rate = Math.round(Number(row.price_pkr) / Number(row.area_sqft));
+      showTip(e,
+        '<div class="t-title">' + esc(row.title) + "</div>" +
+        '<div class="t-row">' + esc(row.city) + " · " + esc(row.area_text) + " (" + num(row.area_sqft) + " sq ft)</div>" +
+        '<div class="t-row">PKR ' + num(row.price_pkr) + "</div>" +
+        '<div class="t-row">' + num(rate) + " per sq ft</div>");
+    });
+    hit.addEventListener("mouseleave", hideTip);
+  });
+}
+
+function renderTable(rows) {
+  const body = document.querySelector("#table tbody");
+  body.innerHTML = [...rows]
+    .sort((a, b) => Number(b.price_pkr) - Number(a.price_pkr))
+    .map((r) => {
+      const rate = Number(r.area_sqft) > 0 ? Math.round(Number(r.price_pkr) / Number(r.area_sqft)) : "";
+      return "<tr>" +
+        '<td><a href="' + esc(r.listing_url) + '" target="_blank" rel="noopener">' + esc(r.title) + "</a></td>" +
+        "<td>" + esc(r.city) + "</td><td>" + esc(r.property_type) + "</td>" +
+        '<td class="num">' + num(r.price_pkr) + "</td>" +
+        '<td class="num">' + esc(r.area_text) + "</td>" +
+        '<td class="num">' + num(r.area_sqft) + "</td>" +
+        '<td class="num">' + (rate === "" ? "" : num(rate)) + "</td>" +
+        '<td class="num">' + esc(r.bedrooms) + "</td>" +
+        '<td class="num">' + esc(r.bathrooms) + "</td>" +
+      "</tr>";
+    })
+    .join("");
+}
+
+fetch("data.json?t=" + Date.now())
+  .then((r) => { if (!r.ok) throw new Error("no data.json"); return r.json(); })
+  .then((payload) => {
+    const rows = (payload.rows || []).filter((r) => r && r.title);
+    if (!rows.length) throw new Error("no listings");
+
+    const when = new Date(payload.generated_at);
+    document.getElementById("stamp").textContent =
+      "Last collected " + when.toLocaleString("en-GB", { dateStyle: "medium", timeStyle: "short" }) +
+      " · " + rows.length + " listings";
+
+    renderTiles(rows);
+    renderPriceChart(rows);
+    renderScatter(rows);
+    renderTable(rows);
+  })
+  .catch((err) => {
+    document.getElementById("stamp").textContent = "No data yet";
+    document.getElementById("tiles").innerHTML =
+      '<div class="empty">No data yet. Run the <strong>Collect listings</strong> workflow, ' +
+      "which writes <code>docs/data.json</code> and commits it.</div>";
+  });
+</script>
+</body>
+</html>

@@ -198,4 +198,26 @@ async function appendOrUpdate({ sheetId, tab, columns, keyColumn, rows }) {
   return { appended: toAppend.length, updated: updates.length };
 }
 
-module.exports = { appendOrUpdate, accessToken, loadKey };
+/** Every row in the tab, as objects keyed by the header row. */
+async function readAll({ sheetId, tab }) {
+  const token = await accessToken();
+  let values;
+  try {
+    values = (await call(token, `${sheetId}/values/${tab}!A:ZZ`)).values || [];
+  } catch (err) {
+    if (/status 400/.test(err.message)) return [];
+    throw err;
+  }
+  if (values.length < 2) return [];
+
+  const header = values[0];
+  return values.slice(1).map((line) => {
+    const row = {};
+    header.forEach((name, i) => {
+      row[name] = line[i] === undefined ? "" : line[i];
+    });
+    return row;
+  });
+}
+
+module.exports = { appendOrUpdate, readAll, accessToken, loadKey };

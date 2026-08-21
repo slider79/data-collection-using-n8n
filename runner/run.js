@@ -16,7 +16,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { extractListing } = require(path.join(__dirname, "..", "extract.js"));
-const { appendOrUpdate } = require(path.join(__dirname, "sheets.js"));
+const { appendOrUpdate, readAll } = require(path.join(__dirname, "sheets.js"));
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
@@ -68,6 +68,16 @@ async function fetchPage(url) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Write the json the static dashboard reads. */
+function writeDashboardData(rows) {
+  const dir = path.join(__dirname, "..", "docs");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "data.json"),
+    JSON.stringify({ generated_at: new Date().toISOString(), rows }, null, 2)
+  );
 }
 
 function summarise(rows, failures) {
@@ -134,7 +144,9 @@ async function main() {
   }
 
   if (dryRun) {
-    console.log("Dry run, nothing written. Rows that would have been saved:");
+    writeDashboardData(rows);
+    console.log("Dry run, sheet untouched. docs/data.json refreshed for preview.");
+    console.log("Rows that would have been saved:");
     console.log(JSON.stringify(rows, null, 2).slice(0, 1500));
   } else {
     const result = await appendOrUpdate({
@@ -145,6 +157,21 @@ async function main() {
       rows,
     });
     console.log(`Sheet updated: ${result.appended} appended, ${result.updated} refreshed.`);
+
+    // Publish what the sheet now holds, so the dashboard shows everything
+    // collected so far rather than only this run. The page is static and reads
+    // this file, which is why there are no keys anywhere in the browser.
+    try {
+      const all = await readAll({
+        sheetId: process.env.GOOGLE_SHEETS_ID,
+        tab: process.env.GOOGLE_SHEETS_TAB || "Listings",
+      });
+      writeDashboardData(all.length ? all : rows);
+      console.log(`Dashboard data written: ${all.length || rows.length} listings.`);
+    } catch (err) {
+      // A dashboard that is a run behind is better than a failed collection.
+      console.log(`Could not refresh dashboard data: ${err.message}`);
+    }
   }
 
   if (process.env.GITHUB_STEP_SUMMARY) {

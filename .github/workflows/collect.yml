@@ -23,7 +23,8 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  # The job commits the refreshed dashboard data back to the repo.
+  contents: write
 
 jobs:
   collect:
@@ -56,3 +57,16 @@ jobs:
           else
             node runner/run.js
           fi
+
+      - name: Publish the dashboard data
+        if: inputs.dry_run != true
+        run: |
+          if git diff --quiet -- docs/data.json; then
+            echo "No change to docs/data.json"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data.json
+          git commit -m "Refresh dashboard data"
+          git push
