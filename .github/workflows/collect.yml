@@ -1,0 +1,58 @@
+name: Collect listings
+
+# The hosted half of the project. n8n is the deliverable, but it has to be a
+# server that stays running; this is the same pipeline on a schedule, for free.
+on:
+  schedule:
+    # 01:00 UTC is 06:00 in Karachi, matching the n8n schedule trigger.
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      urls:
+        description: "Listing urls, one per line. Leave empty to use urls.txt"
+        required: false
+        type: string
+      dry_run:
+        description: "Fetch and extract without writing to the sheet"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: collect-listings
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # No npm install. The runner signs its own JWT with node's crypto, so
+      # there is no dependency tree to resolve and nothing to break on a bad
+      # release of somebody else's package.
+      - name: Collect and save
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_SHEETS_ID: ${{ secrets.GOOGLE_SHEETS_ID }}
+          GOOGLE_SHEETS_TAB: ${{ vars.GOOGLE_SHEETS_TAB }}
+          # Passed through the environment rather than interpolated into the
+          # command, so a url can never become shell syntax.
+          LISTING_URLS: ${{ inputs.urls }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [ "$DRY_RUN" = "true" ]; then
+            node runner/run.js --dry-run
+          else
+            node runner/run.js
+          fi

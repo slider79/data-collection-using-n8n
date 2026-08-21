@@ -50,6 +50,45 @@ To skip straight to a populated sheet, File, Import, Upload and drop in [`sample
 
 ---
 
+## Running it live, without hosting anything
+
+n8n is the deliverable, and it does everything above. But n8n is a server that
+has to stay running, and a laptop that sleeps misses its own schedule. Keeping
+it up somewhere costs money every month to collect thirty seconds of data a day.
+
+So the same pipeline also runs on GitHub Actions, on a schedule, for free:
+
+```
+.github/workflows/collect.yml   daily at 01:00 UTC, or Run workflow on demand
+runner/run.js                   fetch, extract, clean, save
+runner/sheets.js                Google Sheets with no dependencies at all
+urls.txt                        the listings to collect, editable on GitHub
+```
+
+It shares `extract.js` with the n8n Code node, so both halves extract and clean
+identically, and both deduplicate on `listing_id`. A test asserts they agree
+rather than trusting that they do.
+
+`runner/sheets.js` signs its own JWT with Node's `crypto` and calls the Sheets
+REST API directly, so the job runs `node runner/run.js` with **no npm install**:
+nothing to resolve, nothing to cache, nothing to break on someone else's bad
+release.
+
+**Setting it up.** In the repository, Settings, Secrets and variables, Actions:
+
+```
+GOOGLE_SERVICE_ACCOUNT_JSON   the whole service account key file, pasted in
+GOOGLE_SHEETS_ID              the id from the sheet url
+```
+
+Then Actions, Collect listings, Run workflow. Tick **dry run** the first time
+to see what it would write without touching the sheet.
+
+To collect different listings, edit `urls.txt` on GitHub, or paste urls into
+the Run workflow box for a one-off.
+
+---
+
 ## What comes out
 
 19 columns per listing. The task asked for ten fields; the extras are the cleaned numeric versions, which are the point of the cleaning step.

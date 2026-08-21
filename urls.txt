@@ -1,0 +1,8 @@
+# Zameen listing urls, one per line. Blank lines and # comments are ignored.
+#
+# Edit this file on GitHub and the next scheduled run picks it up. To collect a
+# different set once without editing, use Run workflow and paste urls in.
+
+https://www.zameen.com/Property/dha_phase_7_dha_phase_7_-_block_y_exclusive_10_marla_double_unit_house_for_sale_in_dha_phase_7-52274461-1632-1.html
+https://www.zameen.com/Property/dha_phase_6_dha_phase_6_-_block_k_2_kanal_house_for_sale_at_super_hot_location_near_park_commercial-51813229-1619-1.html
+https://www.zameen.com/Property/dha_phase_5_dha_phase_5_-_block_h_house_for_sale_in_beautiful_dha_phase_5_-_block_h-54030577-1605-1.html
